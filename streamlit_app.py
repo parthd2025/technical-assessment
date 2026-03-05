@@ -1,16 +1,42 @@
 """
-Clinical Note Assistant - Designed for Healthcare Practitioners
+Clinical Note Assistant - Web Interface for Healthcare Practitioners.
 
-Run: streamlit run streamlit_app.py
-Ensure API is running: uvicorn src.api:app --reload
+This Streamlit application provides a user-friendly web interface for:
+1. Inputting clinical notes from EMR/EHR systems
+2. Extracting structured data (diagnoses, medications, PHI)
+3. Asking verification questions about the note
+4. Viewing raw JSON responses for debugging
+
+The application connects to the FastAPI backend and provides real-time
+feedback on extraction results with clinical-focused UI/UX.
+
+Usage:
+    streamlit run streamlit_app.py
+
+Prerequisites:
+    - FastAPI backend running on http://localhost:8000
+    - API must be started with: uvicorn src.api:app --reload
+
+Author: Clinical Note Processing System
+Version: 1.0.0
 """
 
 import streamlit as st
 import requests
 from datetime import datetime
+import logging
 
 # Configuration
 API_BASE_URL = "http://localhost:8000"
+
+# Setup basic logging for Streamlit
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+logger.info("Starting Streamlit Clinical Note Assistant")
 
 # Initialize session state
 if 'clinical_note' not in st.session_state:
@@ -65,13 +91,17 @@ st.title("🏥 Clinical Note Assistant")
 
 # API status
 try:
+    logger.debug("Checking API health status")
     response = requests.get(f"{API_BASE_URL}/health", timeout=1)
     if response.status_code == 200:
         st.success("✅ API Connected")
+        logger.info("API health check successful")
     else:
         st.error("⚠️ API Error")
-except:
+        logger.warning(f"API health check failed with status {response.status_code}")
+except Exception as e:
     st.error("❌ API Offline - Start with: uvicorn src.api:app --reload")
+    logger.error(f"API health check failed: {e}")
 
 st.markdown("---")
 
@@ -99,6 +129,7 @@ with left_col:
     # Extract button
     if st.button("🔍 Extract Information", type="primary", use_container_width=True):
         if clinical_note.strip():
+            logger.info(f"User initiated extraction - Note length: {len(clinical_note)} chars")
             with st.spinner("⏳ Analyzing note..."):
                 try:
                     response = requests.post(
@@ -108,17 +139,22 @@ with left_col:
                     )
                     if response.status_code == 200:
                         st.session_state.extraction_result = response.json()
+                        logger.info("Extraction successful")
                         st.rerun()
                     else:
+                        logger.error(f"Extraction failed with status {response.status_code}")
                         st.error(f"Error: {response.status_code}")
                 except Exception as e:
+                    logger.error(f"Extraction request failed: {e}")
                     st.error(f"Connection failed: {e}")
         else:
+            logger.warning("User attempted extraction with empty note")
             st.warning("Please enter a clinical note")
     
     # Clear button
     if st.session_state.extraction_result:
         if st.button("🗑️ Clear Results", use_container_width=True):
+            logger.info("User cleared extraction results")
             st.session_state.extraction_result = None
             st.rerun()
 
@@ -174,6 +210,7 @@ with right_col:
         
         if st.button("Ask", type="secondary", use_container_width=True):
             if question:
+                logger.info(f"User asked question: {question[:100]}")
                 with st.spinner("🔍 Checking..."):
                     try:
                         response = requests.post(
@@ -187,10 +224,13 @@ with right_col:
                         if response.status_code == 200:
                             answer = response.json().get("answer", "")
                             if "cannot answer" in answer.lower():
+                                logger.info("Q&A - Cannot answer from note")
                                 st.warning(answer)
                             else:
+                                logger.info("Q&A answered successfully")
                                 st.success(answer)
                     except Exception as e:
+                        logger.error(f"Query request failed: {e}")
                         st.error(f"Error: {e}")
     
     else:
