@@ -17,9 +17,18 @@ from datetime import datetime
 from groq import Groq
 from src.config import Config
 from src.logger import setup_logger
+import plotly.graph_objects as go
 
-# Initialize logger
+# Initialize logger first
 logger = setup_logger(__name__)
+
+# Try importing PDF processor (optional)
+try:
+    from pdf_processor import PDFProcessor, is_pdf_support_available
+    PDF_SUPPORT = is_pdf_support_available()
+except ImportError:
+    PDF_SUPPORT = False
+    logger.warning("PDF support not available. Install PyPDF2 or pdfplumber for PDF uploads.")
 
 # Page config
 st.set_page_config(
@@ -31,6 +40,10 @@ st.set_page_config(
 # Initialize session state
 if 'history' not in st.session_state:
     st.session_state.history = []
+if 'pdf_text' not in st.session_state:
+    st.session_state.pdf_text = None
+if 'pdf_metadata' not in st.session_state:
+    st.session_state.pdf_metadata = None
 
 class ComparisonEngine:
     """Engine to compare Full LLM vs Hybrid approaches"""
@@ -381,6 +394,19 @@ def main():
         else:
             st.info("No queries yet. Run a comparison to see stats!")
     
+    # Load data from session state if available
+    # Priority: pdf_text (persistent) > sample_context (one-time load)
+    default_query = st.session_state.get('sample_query', '')
+    default_context = st.session_state.get('pdf_text', '') or st.session_state.get('sample_context', '')
+    
+    # Only clear sample_context if it was a one-time load (not from PDF)
+    if 'sample_query' in st.session_state and not st.session_state.get('pdf_text'):
+        del st.session_state.sample_query
+        del st.session_state.sample_context
+    elif 'sample_query' in st.session_state:
+        # Clear query but keep context if it's from PDF
+        del st.session_state.sample_query
+    
     # Main content
     col1, col2 = st.columns([2, 1])
     
@@ -388,14 +414,24 @@ def main():
         st.header("📝 Input")
         query = st.text_input(
             "Enter your query:", 
+            value=default_query,
             placeholder="What medications is the patient taking?"
         )
         
         context = st.text_area(
-            "Context (Clinical note, product catalog, etc.):", 
+            "Context (Clinical note, product catalog, etc.):",
+            value=default_context,
             placeholder="Patient is a 45-year-old male diagnosed with hypertension...",
             height=200
         )
+        
+        # Show PDF metadata if PDF was loaded
+        if st.session_state.pdf_metadata:
+            st.info(
+                f"📄 **Loaded from PDF:** {st.session_state.pdf_metadata['filename']} | "
+                f"Pages: {st.session_state.pdf_metadata['pages']} | "
+                f"Characters: {st.session_state.pdf_metadata['chars']:,}"
+            )
     
     with col2:
         st.header("🎯 Control")
@@ -414,16 +450,56 @@ Current Medications:
 - Aspirin 81mg once daily for cardiovascular protection
 
 Patient reports good compliance with medication regimen."""
+            st.session_state.pdf_text = None
+            st.session_state.pdf_metadata = None
+            st.rerun()
+        
+        # PDF Upload Buttons
+        if PDF_SUPPORT:
+            st.markdown("**Or upload PDF:**")
+            
+            uploaded_file = st.file_uploader(
+                "Upload Clinical Note PDF",
+                type=['pdf'],
+                help="Upload a PDF document to extract text",
+                label_visibility="collapsed"
+            )
+            
+            if uploaded_file is not None:
+                if st.button("📄 Extract PDF Text", use_container_width=True):
+                    with st.spinner("Extracting text from PDF..."):
+                        try:
+                            processor = PDFProcessor()
+                            result = processor.extract_text_from_pdf(uploaded_file)
+                            
+                            if result["success"]:
+                                st.session_state.pdf_text = result["text"]
+                                st.session_state.pdf_metadata = {
+                                    "filename": result["filename"],
+                                    "pages": result["pages"],
+                                    "chars": len(result["text"])
+                                }
+                                st.session_state.sample_context = result["text"]
+                                st.success(f"✅ Extracted {result['pages']} pages from {result['filename']}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {result['error']}")
+                        except Exception as e:
+                            st.error(f"❌ PDF extraction failed: {str(e)}")
+        else:
+            st.info("💡 Install PyPDF2 or pdfplumber for PDF support: `pip install PyPDF2 pdfplumber`")
+        
+        st.markdown("---")
+        
+        # Clear button to reset everything
+        if st.button("🗑️ Clear Context", use_container_width=True):
+            st.session_state.pdf_text = None
+            st.session_state.pdf_metadata = None
+            st.session_state.sample_context = ''
+            st.session_state.sample_query = ''
             st.rerun()
         
         compare_button = st.button("🚀 Compare Approaches", type="primary", use_container_width=True)
-    
-    # Load sample data if button was clicked
-    if 'sample_query' in st.session_state:
-        query = st.session_state.sample_query
-        context = st.session_state.sample_context
-        del st.session_state.sample_query
-        del st.session_state.sample_context
     
     # Comparison Logic
     if compare_button:
@@ -511,19 +587,35 @@ Patient reports good compliance with medication regimen."""
                     col_tokens, col_time = st.columns(2)
                     
                     with col_tokens:
+                        # Determine if tokens were saved or increased
+                        if token_saved >= 0:
+                            token_label = f"{token_savings_pct:.1f}% reduction"
+                            token_delta_color = "normal"
+                        else:
+                            token_label = f"{abs(token_savings_pct):.1f}% increase"
+                            token_delta_color = "inverse"
+                        
                         st.metric(
                             "Tokens Saved",
                             f"{token_saved:,}",
-                            f"{token_savings_pct:.1f}% reduction",
-                            delta_color="normal"
+                            token_label,
+                            delta_color=token_delta_color
                         )
                     
                     with col_time:
+                        # Determine if hybrid is faster or slower
+                        if time_saved >= 0:
+                            time_label = f"{time_savings_pct:.1f}% faster"
+                            time_delta_color = "normal"
+                        else:
+                            time_label = f"{abs(time_savings_pct):.1f}% slower"
+                            time_delta_color = "inverse"
+                        
                         st.metric(
                             "Time Saved",
                             f"{time_saved:.3f}s",
-                            f"{time_savings_pct:.1f}% faster",
-                            delta_color="normal"
+                            time_label,
+                            delta_color=time_delta_color
                         )
                     
                 except Exception as e:
@@ -593,19 +685,89 @@ Patient reports good compliance with medication regimen."""
         
         with chart_col1:
             st.markdown("**Token Usage Comparison**")
-            chart_data = pd.DataFrame({
-                'Full LLM': [h['full_llm']['tokens'] for h in st.session_state.history],
-                'Hybrid': [h['hybrid']['tokens'] for h in st.session_state.history]
-            })
-            st.bar_chart(chart_data)
+            
+            # Prepare data for grouped bar chart
+            llm_tokens = [h['full_llm']['tokens'] for h in st.session_state.history]
+            hybrid_tokens = [h['hybrid']['tokens'] for h in st.session_state.history]
+            queries = [f"Q{i+1}" for i in range(len(st.session_state.history))]
+            
+            # Create plotly figure
+            fig_tokens = go.Figure(data=[
+                go.Bar(
+                    name='Full LLM',
+                    x=queries,
+                    y=llm_tokens,
+                    text=[f"{val:,}" for val in llm_tokens],
+                    textposition='auto',
+                    marker_color='lightblue',
+                    textfont=dict(size=12, color='black')
+                ),
+                go.Bar(
+                    name='Hybrid',
+                    x=queries,
+                    y=hybrid_tokens,
+                    text=[f"{val:,}" for val in hybrid_tokens],
+                    textposition='auto',
+                    marker_color='darkblue',
+                    textfont=dict(size=12, color='white')
+                )
+            ])
+            
+            fig_tokens.update_layout(
+                barmode='group',
+                height=400,
+                xaxis_title="Query",
+                yaxis_title="Tokens",
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+            )
+            
+            st.plotly_chart(fig_tokens, use_container_width=True)
         
         with chart_col2:
             st.markdown("**Time Comparison**")
-            time_data = pd.DataFrame({
-                'Full LLM': [h['full_llm']['time'] for h in st.session_state.history],
-                'Hybrid': [h['hybrid']['time'] for h in st.session_state.history]
-            })
-            st.bar_chart(time_data)
+            
+            # Prepare data for grouped bar chart
+            llm_time = [h['full_llm']['time'] for h in st.session_state.history]
+            hybrid_time = [h['hybrid']['time'] for h in st.session_state.history]
+            queries = [f"Q{i+1}" for i in range(len(st.session_state.history))]
+            
+            # Create plotly figure
+            fig_time = go.Figure(data=[
+                go.Bar(
+                    name='Full LLM',
+                    x=queries,
+                    y=llm_time,
+                    text=[f"{val:.3f}s" for val in llm_time],
+                    textposition='auto',
+                    marker_color='lightblue',
+                    textfont=dict(size=12, color='black')
+                ),
+                go.Bar(
+                    name='Hybrid',
+                    x=queries,
+                    y=hybrid_time,
+                    text=[f"{val:.3f}s" for val in hybrid_time],
+                    textposition='auto',
+                    marker_color='darkblue',
+                    textfont=dict(size=12, color='white')
+                )
+            ])
+            
+            fig_time.update_layout(
+                barmode='group',
+                height=400,
+                xaxis_title="Query",
+                yaxis_title="Time (seconds)",
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+            )
+            
+            st.plotly_chart(fig_time, use_container_width=True)
     
     # Footer
     st.markdown("---")
