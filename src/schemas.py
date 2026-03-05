@@ -10,7 +10,7 @@ This module defines request and response models using Pydantic for:
 All models follow healthcare data standards and include comprehensive field descriptions.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List
 
 
@@ -28,8 +28,17 @@ class ClinicalNoteInput(BaseModel):
         ..., 
         description="Raw clinical note text",
         min_length=10,
+        max_length=50000,
         examples=["Patient John Doe presents with chest pain..."]
     )
+    
+    @field_validator('clinical_note')
+    @classmethod
+    def validate_clinical_note(cls, v: str) -> str:
+        """Validate clinical note is not just whitespace."""
+        if not v.strip():
+            raise ValueError("Clinical note cannot be empty or only whitespace")
+        return v.strip()
 
 
 class Medication(BaseModel):
@@ -47,18 +56,32 @@ class Medication(BaseModel):
     name: str = Field(
         ..., 
         description="Medication name",
+        min_length=1,
+        max_length=200,
         examples=["Lisinopril", "Metformin", "Aspirin"]
     )
     dosage: str = Field(
         ..., 
         description="Medication dosage with units",
+        min_length=1,
+        max_length=100,
         examples=["10mg", "500mg", "2 tablets"]
     )
     frequency: str = Field(
         ..., 
         description="Frequency of medication intake",
+        min_length=1,
+        max_length=100,
         examples=["daily", "BID", "PRN", "q12h"]
     )
+    
+    @field_validator('name', 'dosage', 'frequency')
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        """Validate fields are not empty or only whitespace."""
+        if not v.strip():
+            raise ValueError("Medication fields cannot be empty or only whitespace")
+        return v.strip()
 
 
 class ExtractedEntity(BaseModel):
@@ -96,6 +119,13 @@ class ExtractedEntity(BaseModel):
         ..., 
         description="Whether Protected Health Information (PHI) is detected per HIPAA guidelines"
     )
+    
+    @field_validator('diagnoses')
+    @classmethod
+    def validate_diagnoses(cls, v: List[str]) -> List[str]:
+        """Validate diagnoses list doesn't contain empty strings."""
+        cleaned = [d.strip() for d in v if d and d.strip()]
+        return cleaned
 
 
 class QueryInput(BaseModel):
@@ -115,14 +145,24 @@ class QueryInput(BaseModel):
     clinical_note: str = Field(
         ..., 
         description="Clinical note text to query",
-        min_length=10
+        min_length=10,
+        max_length=50000
     )
     question: str = Field(
         ..., 
         description="Question to answer based on the clinical note",
         min_length=5,
+        max_length=500,
         examples=["What medications is the patient taking?", "What is the diagnosis?"]
     )
+    
+    @field_validator('clinical_note', 'question')
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        """Validate fields are not empty or only whitespace."""
+        if not v.strip():
+            raise ValueError("Fields cannot be empty or only whitespace")
+        return v.strip()
 
 
 class QueryResponse(BaseModel):

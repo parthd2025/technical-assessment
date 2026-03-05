@@ -394,18 +394,19 @@ def main():
         else:
             st.info("No queries yet. Run a comparison to see stats!")
     
-    # Load data from session state if available
-    # Priority: pdf_text (persistent) > sample_context (one-time load)
-    default_query = st.session_state.get('sample_query', '')
-    default_context = st.session_state.get('pdf_text', '') or st.session_state.get('sample_context', '')
+    # Initialize session state for query and context persistence
+    if 'query_input' not in st.session_state:
+        st.session_state.query_input = ''
+    if 'context_input' not in st.session_state:
+        st.session_state.context_input = ''
     
-    # Only clear sample_context if it was a one-time load (not from PDF)
-    if 'sample_query' in st.session_state and not st.session_state.get('pdf_text'):
+    # Transfer sample data directly to widget keys (from Load Sample Data button)
+    if 'sample_query' in st.session_state:
+        st.session_state.query_input = st.session_state.sample_query
         del st.session_state.sample_query
+    if 'sample_context' in st.session_state:
+        st.session_state.context_input = st.session_state.sample_context
         del st.session_state.sample_context
-    elif 'sample_query' in st.session_state:
-        # Clear query but keep context if it's from PDF
-        del st.session_state.sample_query
     
     # Main content
     col1, col2 = st.columns([2, 1])
@@ -414,15 +415,15 @@ def main():
         st.header("📝 Input")
         query = st.text_input(
             "Enter your query:", 
-            value=default_query,
-            placeholder="What medications is the patient taking?"
+            placeholder="What medications is the patient taking?",
+            key="query_input"
         )
         
         context = st.text_area(
             "Context (Clinical note, product catalog, etc.):",
-            value=default_context,
             placeholder="Patient is a 45-year-old male diagnosed with hypertension...",
-            height=200
+            height=200,
+            key="context_input"
         )
         
         # Show PDF metadata if PDF was loaded
@@ -479,7 +480,7 @@ Patient reports good compliance with medication regimen."""
                                     "pages": result["pages"],
                                     "chars": len(result["text"])
                                 }
-                                st.session_state.sample_context = result["text"]
+                                st.session_state.context_input = result["text"]
                                 st.success(f"✅ Extracted {result['pages']} pages from {result['filename']}")
                                 st.rerun()
                             else:
@@ -495,8 +496,8 @@ Patient reports good compliance with medication regimen."""
         if st.button("🗑️ Clear Context", use_container_width=True):
             st.session_state.pdf_text = None
             st.session_state.pdf_metadata = None
-            st.session_state.sample_context = ''
-            st.session_state.sample_query = ''
+            st.session_state.query_input = ''
+            st.session_state.context_input = ''
             st.rerun()
         
         compare_button = st.button("🚀 Compare Approaches", type="primary", use_container_width=True)

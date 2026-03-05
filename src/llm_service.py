@@ -155,7 +155,7 @@ def extract_entities_from_text(clinical_note: str) -> ExtractedEntity:
         ExtractedEntity: Structured data with diagnoses, medications, and PHI flag
     
     Raises:
-        ValueError: If LLM returns invalid JSON or data doesn't match schema
+        ValueError: If LLM returns invalid JSON or data doesn't match schema, or if input is invalid
         RuntimeError: If Groq API call fails
     
     Example:
@@ -166,6 +166,22 @@ def extract_entities_from_text(clinical_note: str) -> ExtractedEntity:
         >>> print(result.medications[0].name)
         'Metformin'
     """
+    # Edge case: Empty or whitespace-only input
+    if not clinical_note or not clinical_note.strip():
+        logger.warning("Empty clinical note provided")
+        raise ValueError("Clinical note cannot be empty")
+    
+    # Edge case: Very short input (likely not a real clinical note)
+    if len(clinical_note.strip()) < 10:
+        logger.warning(f"Clinical note too short: {len(clinical_note)} chars")
+        raise ValueError("Clinical note must be at least 10 characters")
+    
+    # Edge case: Very long input (may exceed token limits)
+    MAX_NOTE_LENGTH = 50000  # ~12,500 tokens with 4 chars/token ratio
+    if len(clinical_note) > MAX_NOTE_LENGTH:
+        logger.warning(f"Clinical note too long: {len(clinical_note)} chars, truncating to {MAX_NOTE_LENGTH}")
+        clinical_note = clinical_note[:MAX_NOTE_LENGTH]
+    
     logger.info(f"Starting entity extraction - Note length: {len(clinical_note)} chars")
     start_time = time.time()
     
@@ -175,20 +191,48 @@ CRITICAL RULES:
 1. Output ONLY valid JSON - no additional text, explanations, or markdown
 2. Extract only information explicitly stated in the text
 3. Do not infer, guess, or hallucinate any medical information
-4. PHI (Protected Health Information) includes: names, dates of birth, phone numbers, addresses, medical record numbers, social security numbers
+4. If no diagnoses found, return empty array []
+5. If no medications found, return empty array []
+6. PHI (Protected Health Information) includes: patient names, dates of birth, phone numbers, addresses, medical record numbers, social security numbers, email addresses
 
-JSON Schema:
+JSON Schema (REQUIRED FORMAT):
 {
   "diagnoses": ["list of medical conditions mentioned"],
   "medications": [
     {
       "name": "medication name",
-      "dosage": "dosage amount",
-      "frequency": "how often"
+      "dosage": "dosage amount with units",
+      "frequency": "administration schedule"
     }
   ],
-  "phi_detected": true or false
-}"""
+  "phi_detected": boolean
+}
+
+EXAMPLES:
+
+Example 1 - Full clinical note:
+Input: "Patient John Doe (DOB: 11/04/1958) diagnosed with Type 2 Diabetes and Hypertension. Prescribed Metformin 500mg BID and Lisinopril 10mg daily."
+Output: {"diagnoses": ["Type 2 Diabetes", "Hypertension"], "medications": [{"name": "Metformin", "dosage": "500mg", "frequency": "BID"}, {"name": "Lisinopril", "dosage": "10mg", "frequency": "daily"}], "phi_detected": true}
+
+Example 2 - No medications:
+Input: "Patient diagnosed with seasonal allergies. No medications prescribed at this time."
+Output: {"diagnoses": ["seasonal allergies"], "medications": [], "phi_detected": false}
+
+Example 3 - No PHI:
+Input: "Patient presents with acute bronchitis. Started on Azithromycin 250mg daily for 5 days."
+Output: {"diagnoses": ["acute bronchitis"], "medications": [{"name": "Azithromycin", "dosage": "250mg", "frequency": "daily for 5 days"}], "phi_detected": false}
+
+MEDICATION EXTRACTION RULES:
+- Always include units with dosage (mg, mL, tablets, etc.)
+- Capture full frequency instructions (BID, TID, QID, PRN, daily, twice daily, etc.)
+- For PRN medications, include the condition (e.g., "PRN for pain")
+- Extract generic names when mentioned, otherwise brand names
+
+DIAGNOSIS EXTRACTION RULES:
+- Extract medical conditions, diseases, and diagnoses
+- Include both acute and chronic conditions
+- Do not extract symptoms unless explicitly labeled as a diagnosis
+- Preserve medical terminology as written"""
 
     user_prompt = f"""Extract entities from this clinical note:
 
@@ -315,6 +359,7 @@ def answer_clinical_question(clinical_note: str, question: str) -> str:
         str: Answer based on the note, or refusal message if info not present
     
     Raises:
+        ValueError: If inputs are invalid
         RuntimeError: If Groq API call fails
     
     Example:
@@ -323,6 +368,27 @@ def answer_clinical_question(clinical_note: str, question: str) -> str:
         >>> print(answer)
         'The Lisinopril dosage is 10mg daily'
     """
+    # Edge case: Empty or whitespace-only inputs
+    if not clinical_note or not clinical_note.strip():
+        logger.warning("Empty clinical note provided to Q&A")
+        raise ValueError("Clinical note cannot be empty")
+    
+    if not question or not question.strip():
+        logger.warning("Empty question provided to Q&A")
+        raise ValueError("Question cannot be empty")
+    
+    # Edge case: Very long inputs
+    MAX_NOTE_LENGTH = 50000
+    MAX_QUESTION_LENGTH = 500
+    
+    if len(clinical_note) > MAX_NOTE_LENGTH:
+        logger.warning(f"Clinical note too long for Q&A: {len(clinical_note)} chars, truncating")
+        clinical_note = clinical_note[:MAX_NOTE_LENGTH]
+    
+    if len(question) > MAX_QUESTION_LENGTH:
+        logger.warning(f"Question too long: {len(question)} chars, truncating")
+        question = question[:MAX_QUESTION_LENGTH]
+    
     logger.info(f"Answering clinical question - Note length: {len(clinical_note)} chars, Question: {question[:100]}")
     start_time = time.time()
     
@@ -332,8 +398,30 @@ CRITICAL RULES:
 1. Answer ONLY based on information explicitly stated in the clinical note
 2. If the answer is not in the note, respond EXACTLY with: "I cannot answer this based on the provided clinical note."
 3. Do not infer, speculate, or add medical knowledge not present in the text
-4. Be concise and factual
-5. Quote relevant parts of the note when appropriate"""
+4. Do not use your general medical knowledge - only what's in the note
+5. Be concise and factual - maximum 3 sentences
+6. Quote relevant parts of the note when appropriate using quotation marks
+7. For medication questions, include name, dosage, and frequency if available
+8. For diagnosis questions, use the exact terminology from the note
+
+EXAMPLES:
+
+Example 1 - Information present:
+Note: "Patient prescribed Lisinopril 10mg daily for hypertension."
+Question: "What is the Lisinopril dosage?"
+Answer: "The Lisinopril dosage is 10mg taken daily."
+
+Example 2 - Information not present:
+Note: "Patient has Type 2 Diabetes."
+Question: "What is the patient's A1C level?"
+Answer: "I cannot answer this based on the provided clinical note."
+
+Example 3 - Partial information:
+Note: "Patient started on Metformin for diabetes management."
+Question: "What is the Metformin dosage?"
+Answer: "I cannot answer this based on the provided clinical note."
+
+Remember: If any part of the answer requires information not in the note, use the refusal response."""
 
     user_prompt = f"""Clinical Note:
 {clinical_note}

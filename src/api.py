@@ -98,8 +98,11 @@ async def extract_entities(input: ClinicalNoteInput) -> ExtractedEntity:
         ExtractedEntity: Structured extraction results
     
     Raises:
-        HTTPException 422: If validation fails or LLM returns invalid data
-        HTTPException 500: If extraction process fails
+        HTTPException 400: If input validation fails or note is malformed
+        HTTPException 422: If LLM returns invalid data structure
+        HTTPException 429: If rate limit is exceeded (future implementation)
+        HTTPException 500: If extraction process fails unexpectedly
+        HTTPException 503: If LLM service is unavailable
     
     Example:
         >>> POST /api/v1/extract
@@ -126,11 +129,48 @@ async def extract_entities(input: ClinicalNoteInput) -> ExtractedEntity:
         return extracted_data
         
     except ValueError as e:
-        logger.warning(f"Validation error during extraction: {e}")
-        raise HTTPException(status_code=422, detail=str(e))
+        error_msg = str(e)
+        logger.warning(f"Validation error during extraction: {error_msg}")
+        
+        # Determine appropriate status code based on error type
+        if "empty" in error_msg.lower() or "too short" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invalid input", "message": error_msg}
+            )
+        elif "failed to return valid JSON" in error_msg or "validation failed" in error_msg.lower():
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "Invalid LLM response", "message": error_msg}
+            )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "Validation error", "message": error_msg}
+            )
+            
+    except RuntimeError as e:
+        error_msg = str(e)
+        logger.error(f"Runtime error during extraction: {error_msg}")
+        
+        # Check if it's a service availability issue
+        if "API call" in error_msg or "Groq" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "LLM service unavailable", "message": "The LLM service is temporarily unavailable. Please try again later."}
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Extraction failed", "message": error_msg}
+            )
+            
     except Exception as e:
         logger.error(f"Unexpected error during extraction: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error extracting entities: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Internal server error", "message": "An unexpected error occurred. Please try again or contact support if the issue persists."}
+        )
 
 @app.post("/api/v1/query", response_model=QueryResponse)
 async def query_clinical_note(input: QueryInput) -> QueryResponse:
@@ -148,7 +188,9 @@ async def query_clinical_note(input: QueryInput) -> QueryResponse:
         QueryResponse: Answer to the question
     
     Raises:
-        HTTPException 500: If query processing fails
+        HTTPException 400: If input validation fails
+        HTTPException 503: If LLM service is unavailable
+        HTTPException 500: If query processing fails unexpectedly
     
     Example:
         >>> POST /api/v1/query
@@ -177,6 +219,33 @@ async def query_clinical_note(input: QueryInput) -> QueryResponse:
         
         return QueryResponse(answer=answer)
         
+    except ValueError as e:
+        error_msg = str(e)
+        logger.warning(f"Validation error during query: {error_msg}")
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid input", "message": error_msg}
+        )
+        
+    except RuntimeError as e:
+        error_msg = str(e)
+        logger.error(f"Runtime error during query: {error_msg}")
+        
+        # Check if it's a service availability issue
+        if "API call" in error_msg or "Groq" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "LLM service unavailable", "message": "The LLM service is temporarily unavailable. Please try again later."}
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Query failed", "message": error_msg}
+            )
+            
     except Exception as e:
-        logger.error(f"Error during query: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error answering question: {str(e)}")
+        logger.error(f"Unexpected error during query: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Internal server error", "message": "An unexpected error occurred. Please try again or contact support if the issue persists."}
+        )
