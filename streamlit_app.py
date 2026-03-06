@@ -118,13 +118,11 @@ with left_col:
     
     clinical_note = st.text_area(
         "Paste clinical note here",
-        value=st.session_state.clinical_note,
         height=400,
         placeholder="Paste clinical note from EMR...",
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="clinical_note"
     )
-    
-    st.session_state.clinical_note = clinical_note
     
     # Extract button
     if st.button("🔍 Extract Information", type="primary", use_container_width=True):

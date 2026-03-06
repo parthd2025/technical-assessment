@@ -480,7 +480,8 @@ Patient reports good compliance with medication regimen."""
                                     "pages": result["pages"],
                                     "chars": len(result["text"])
                                 }
-                                st.session_state.context_input = result["text"]
+                                # Use temporary variable like sample_context pattern
+                                st.session_state.sample_context = result["text"]
                                 st.success(f"✅ Extracted {result['pages']} pages from {result['filename']}")
                                 st.rerun()
                             else:
@@ -496,8 +497,9 @@ Patient reports good compliance with medication regimen."""
         if st.button("🗑️ Clear Context", use_container_width=True):
             st.session_state.pdf_text = None
             st.session_state.pdf_metadata = None
-            st.session_state.query_input = ''
-            st.session_state.context_input = ''
+            # Use temporary variables to clear - they'll transfer before widget creation
+            st.session_state.sample_query = ''
+            st.session_state.sample_context = ''
             st.rerun()
         
         compare_button = st.button("🚀 Compare Approaches", type="primary", use_container_width=True)
