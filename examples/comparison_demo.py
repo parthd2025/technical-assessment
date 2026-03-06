@@ -9,6 +9,12 @@ Shows token savings, time savings, and accuracy comparison.
 Perfect for client demonstrations.
 """
 
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import streamlit as st
 import time
 import pandas as pd
@@ -24,7 +30,7 @@ logger = setup_logger(__name__)
 
 # Try importing PDF processor (optional)
 try:
-    from pdf_processor import PDFProcessor, is_pdf_support_available
+    from src.pdf_processor import PDFProcessor, is_pdf_support_available
     PDF_SUPPORT = is_pdf_support_available()
 except ImportError:
     PDF_SUPPORT = False
