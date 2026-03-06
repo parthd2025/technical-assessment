@@ -25,9 +25,10 @@ import streamlit as st
 import requests
 from datetime import datetime
 import logging
+import os
 
-# Configuration
-API_BASE_URL = "http://localhost:8000"
+# Configuration - Use environment variable or default to localhost
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # Setup basic logging for Streamlit
 logging.basicConfig(

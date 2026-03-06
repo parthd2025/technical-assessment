@@ -128,245 +128,92 @@ Answer:"""
     
     def hybrid_approach(self, query: str, context: str) -> dict:
         """
-        Enhanced Hybrid approach with Regex - tries pattern matching first, falls back to LLM.
-        
-        This approach:
-        1. Checks if query needs reasoning (Why/How/Explain) → Direct to LLM
-        2. Tries regex pattern matching for structured data → 0 tokens
-        3. Falls back to LLM for complex queries → Uses tokens
-        
-        Regex handles ~70% of queries with 0 tokens and faster response!
+        Simple Hybrid: Try basic regex patterns first, fall back to LLM.
         
         Args:
             query: User query
-            context: Clinical note or product catalog context
+            context: Clinical note
             
         Returns:
             dict with answer, tokens, time, used_llm flag
         """
-        logger.info(f"Hybrid approach (Regex) - Query: {query[:50]}...")
+        logger.info(f"Hybrid approach - Query: {query[:50]}...")
         start_time = time.time()
         query_lower = query.lower()
         
-        # ===== STEP 1: Check for Complex Query Indicators =====
-        # These ALWAYS need LLM reasoning
-        complex_indicators = ['why', 'how', 'explain', 'summarize', 'analyze', 
-                            'interpret', 'relationship', 'appropriate', 'should',
-                            'compare', 'mean', 'suggest', 'recommend']
-        
-        # Check if query starts with complex words
-        first_word = query_lower.split()[0] if query_lower.split() else ''
-        if first_word in complex_indicators or any(ind in query_lower for ind in ['why ', 'how ', 'explain ']):
-            logger.info("Hybrid - Complex query detected, using LLM")
+        # Skip complex queries - send directly to LLM
+        if any(word in query_lower for word in ['why', 'how', 'explain', 'summarize', 'compare']):
             result = self.full_llm_approach(query, context)
             result["used_llm"] = True
             return result
         
-        # ===== STEP 2: Try REGEX Pattern Matching =====
+        # Try simple regex patterns
         
-        # PATTERN 1: Medication Extraction
-        if any(word in query_lower for word in ['medication', 'drug', 'prescription', 'taking', 'prescribed']):
-            # Regex: Match drug names with dosages - handles various formats
-            # Matches: "Lisinopril 10mg", "- Metformin 500mg twice daily", "prescribed Aspirin 81mg"
-            pattern = r'([A-Z][a-z]{2,}(?:opril|pril|formin|terol|cillin|mycin|azole|olol|pine)?)\s+(\d+(?:\.\d+)?)\s*(mg|g|mcg|ml)(?:\s+(once|twice|three\s+times|[\d]+x?))?\s*(?:(daily|a\s+day|per\s+day))?'
-            matches = re.findall(pattern, context, re.IGNORECASE)
-            
-            if matches:
-                medications = []
-                seen = set()  # Avoid duplicates
-                for match in matches:
-                    med_name = match[0].title()
-                    dosage = match[1]
-                    unit = match[2]
-                    freq = match[3].strip() if match[3] else ''
-                    daily = match[4].strip() if match[4] else ''
-                    
-                    # Build medication string
-                    med_str = f"{med_name} {dosage}{unit}"
-                    if freq and daily:
-                        med_str += f" {freq} {daily}"
-                    elif freq:
-                        med_str += f" {freq}"
-                    elif daily:
-                        med_str += f" {daily}"
-                    
-                    # Avoid duplicates
-                    if med_str not in seen:
-                        medications.append(med_str)
-                        seen.add(med_str)
-                
-                if medications:
-                    answer = f"Medications: {', '.join(medications)}"
-                    execution_time = time.time() - start_time
-                    logger.info(f"Hybrid (Regex) - Extracted {len(medications)} medications, Time: {execution_time:.3f}s")
-                    return {
-                        "answer": answer,
-                        "tokens": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "time": execution_time,
-                        "used_llm": False
-                    }
-        
-        # PATTERN 2: Specific Dosage Query
-        dosage_match = re.search(r'(?:dosage|dose|how much)\s+(?:of\s+)?([A-Z][a-z]+)', query, re.IGNORECASE)
-        if dosage_match:
-            drug_name = dosage_match.group(1)
-            # Find specific drug dosage
-            pattern = rf'{drug_name}\s+(\d+(?:\.\d+)?)\s?(mg|g|mcg|ml)(?:\s+(once|twice|three times))?(?:\s+(daily|a day))?'
-            match = re.search(pattern, context, re.IGNORECASE)
-            
+        # PATTERN 1: Patient Name
+        if 'name' in query_lower:
+            match = re.search(r'[Pp]atient\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', context)
             if match:
-                answer = f"The dosage of {drug_name} is {match.group(1)}{match.group(2)}"
-                if match.group(3) and match.group(4):
-                    answer += f" {match.group(3)} {match.group(4)}"
-                
                 execution_time = time.time() - start_time
-                logger.info(f"Hybrid (Regex) - Extracted dosage for {drug_name}, Time: {execution_time:.3f}s")
                 return {
-                    "answer": answer,
-                    "tokens": 0,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "time": execution_time,
-                    "used_llm": False
+                    "answer": f"Patient name: {match.group(1)}",
+                    "tokens": 0, "input_tokens": 0, "output_tokens": 0,
+                    "time": execution_time, "used_llm": False
                 }
         
-        # PATTERN 3: Diagnosis Extraction
-        if 'diagnosis' in query_lower or 'diagnosed' in query_lower or 'condition' in query_lower:
-            # Regex: Match diagnosis patterns
-            patterns = [
-                r'(?:Diagnosis|Diagnosed with|Condition):\s*([A-Z][a-zA-Z\s,]+?)(?:\.|,|\n|$)',
-                r'(?:suffering from|has)\s+([A-Z][a-z]+(?:\s+[A-Z]?[a-z]+)?(?:\s+Diabetes)?)',
-            ]
-            
-            for pattern in patterns:
-                matches = re.findall(pattern, context, re.IGNORECASE)
-                if matches:
-                    diagnoses = [d.strip().rstrip(',') for d in matches]
-                    answer = f"Diagnosis: {', '.join(set(diagnoses))}"
-                    execution_time = time.time() - start_time
-                    logger.info(f"Hybrid (Regex) - Extracted diagnosis, Time: {execution_time:.3f}s")
-                    return {
-                        "answer": answer,
-                        "tokens": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "time": execution_time,
-                        "used_llm": False
-                    }
-        
-        # PATTERN 4: Date/DOB Extraction
-        if any(word in query_lower for word in ['date', 'dob', 'birth', 'born', 'age']):
-            # Regex: Match dates in various formats
-            patterns = [
-                r'(?:DOB|Date of Birth|Born):\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
-                r'(?:DOB|Date of Birth|Born)\s*[:\(]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
-                r'\((?:DOB):\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})\)'
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, context, re.IGNORECASE)
-                if match:
-                    answer = f"Date of birth: {match.group(1)}"
-                    execution_time = time.time() - start_time
-                    logger.info(f"Hybrid (Regex) - Extracted DOB, Time: {execution_time:.3f}s")
-                    return {
-                        "answer": answer,
-                        "tokens": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "time": execution_time,
-                        "used_llm": False
-                    }
-        
-        # PATTERN 5: Blood Pressure / Vital Signs
-        if any(word in query_lower for word in ['blood pressure', 'bp', 'vital']):
-            # Enhanced pattern - handles multiple formats
-            # Matches: "BP: 120/80", "Blood pressure: 135/85", "blood pressure was 120/80", "elevated at 135/85"
-            patterns = [
-                r'(?:Blood pressure|BP):\s*(\d{2,3}/\d{2,3})',  # "BP: 120/80"
-                r'(?:Blood pressure|BP)\s+(?:was|is|measured|noted|recorded|reading)\s+(?:to\s+be\s+)?(?:slightly\s+)?(?:elevated\s+)?(?:at\s+)?(\d{2,3}/\d{2,3})',  # "BP was elevated at 135/85"
-                r'(?:at|of)\s+(\d{2,3}/\d{2,3})\s*(?:mmHg)?',  # "elevated at 135/85"
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, context, re.IGNORECASE)
-                if match:
-                    bp_value = match.group(1)
-                    answer = f"Blood pressure: {bp_value} mmHg"
-                    execution_time = time.time() - start_time
-                    logger.info(f"Hybrid (Regex) - Extracted BP: {bp_value}, Time: {execution_time:.3f}s")
-                    return {
-                        "answer": answer,
-                        "tokens": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "time": execution_time,
-                        "used_llm": False
-                    }
-        
-        # PATTERN 6: Frequency Questions (how often, when to take)
-        if any(phrase in query_lower for phrase in ['how often', 'frequency', 'when to take', 'when should']):
-            # Enhanced pattern - handles multiple frequency formats
-            # Matches: "twice daily", "2 puffs q4h", "every 4 hours", "once a day", "PRN"
-            patterns = [
-                r'(\d+\s+puffs?\s+q\d+h)',  # "2 puffs q4h"
-                r'(every\s+\d+\s+hours?)',  # "every 4 hours"
-                r'(\d+\s+times?\s+(?:a\s+)?(?:daily|day))',  # "3 times daily"
-                r'(once|twice|three times|four times)\s+(?:a\s+)?(?:day|daily)',  # "twice daily"
-                r'(PRN)',  # "PRN" (as needed)
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, context, re.IGNORECASE)
-                if match:
-                    frequency = match.group(0)
-                    answer = f"Frequency: {frequency}"
-                    execution_time = time.time() - start_time
-                    logger.info(f"Hybrid (Regex) - Extracted frequency: {frequency}, Time: {execution_time:.3f}s")
-                    return {
-                        "answer": answer,
-                        "tokens": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "time": execution_time,
-                        "used_llm": False
-                    }
-        
-        # PATTERN 7: Yes/No Questions (presence check)
-        if query_lower.startswith(('is ', 'does ', 'has ', 'was ', 'were ', 'did ')):
-            # Extract key terms and check if they exist in context
-            key_terms = self._extract_key_terms(query)
-            found_terms = [term for term in key_terms if term.lower() in context.lower()]
-            
-            if found_terms:
-                answer = f"Yes, the patient has/is on: {', '.join(found_terms)}"
+        # PATTERN 2: Medications (simple - one pattern only)
+        if any(word in query_lower for word in ['medication', 'drug', 'prescribed', 'taking']):
+            pattern = r'([A-Z][a-z]+(?:formin|pril|terol)?)\s+(\d+)\s*(mg|mcg|units?)\s*(?:(PO|IV))?\s*(?:(BID|TID|daily|q\d+h))?'
+            matches = re.findall(pattern, context, re.IGNORECASE)
+            if matches:
+                meds = [f"{m[0]} {m[1]}{m[2]}" + (f" {m[4]}" if m[4] else "") for m in matches]
                 execution_time = time.time() - start_time
-                logger.info(f"Hybrid (Regex) - Yes/No answered, Time: {execution_time:.3f}s")
                 return {
-                    "answer": answer,
-                    "tokens": 0,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "time": execution_time,
-                    "used_llm": False
+                    "answer": f"Medications: {', '.join(meds)}",
+                    "tokens": 0, "input_tokens": 0, "output_tokens": 0,
+                    "time": execution_time, "used_llm": False
                 }
         
-        # ===== STEP 3: No Pattern Match - Fall Back to LLM =====
-        logger.info("Hybrid - No regex pattern matched, using LLM")
+        # PATTERN 3: Diagnosis
+        if 'diagnosis' in query_lower or 'condition' in query_lower:
+            match = re.search(r'[Dd]iagnosis:\s*([A-Za-z\s\d]+?)(?:\.|,|\n)', context)
+            if match:
+                execution_time = time.time() - start_time
+                return {
+                    "answer": f"Diagnosis: {match.group(1).strip()}",
+                    "tokens": 0, "input_tokens": 0, "output_tokens": 0,
+                    "time": execution_time, "used_llm": False
+                }
+        
+        # PATTERN 4: Date of Birth
+        if any(word in query_lower for word in ['dob', 'birth', 'born']):
+            match = re.search(r'DOB[:\s]*\(?(\d{1,2}[/-]\d{1,2}[/-]\d{4})\)?', context, re.IGNORECASE)
+            if match:
+                execution_time = time.time() - start_time
+                return {
+                    "answer": f"Date of birth: {match.group(1)}",
+                    "tokens": 0, "input_tokens": 0, "output_tokens": 0,
+                    "time": execution_time, "used_llm": False
+                }
+        
+        # PATTERN 5: Simple "what is X" extraction
+        what_match = re.search(r'what\s+is\s+(?:the\s+)?(?:patient\s+)?(\w+)', query_lower)
+        if what_match:
+            keyword = what_match.group(1)
+            # Try finding "keyword: value" pattern in context
+            value_match = re.search(rf'{keyword}[:\s]+([^,.\n]+)', context, re.IGNORECASE)
+            if value_match:
+                execution_time = time.time() - start_time
+                return {
+                    "answer": f"{keyword.title()}: {value_match.group(1).strip()}",
+                    "tokens": 0, "input_tokens": 0, "output_tokens": 0,
+                    "time": execution_time, "used_llm": False
+                }
+        
+        # No pattern matched - use LLM
+        logger.info("Hybrid - No regex matched, using LLM")
         result = self.full_llm_approach(query, context)
         result["used_llm"] = True
         return result
-    
-    def _extract_key_terms(self, query: str) -> list:
-        """Extract key medical/business terms from query"""
-        # Simple extraction - remove common words
-        stop_words = {'is', 'does', 'has', 'was', 'were', 'did', 'the', 'a', 'an', 'in', 
-                     'on', 'at', 'to', 'for', 'their', 'patient', 'should', 'take'}
-        words = query.lower().replace('?', '').split()
-        key_terms = [w for w in words if w not in stop_words and len(w) > 3]
-        return key_terms
 
 
 def main():
@@ -445,7 +292,7 @@ def main():
         st.markdown("<br>", unsafe_allow_html=True)
         
         # Sample data button
-        if st.button("📋 Load Sample Data", use_container_width=True):
+        if st.button("📋 Load Sample Data", width='stretch'):
             st.session_state.sample_query = "What medications is the patient taking?"
             st.session_state.sample_context = """Patient John Doe, 45-year-old male.
 
@@ -473,7 +320,7 @@ Patient reports good compliance with medication regimen."""
             )
             
             if uploaded_file is not None:
-                if st.button("📄 Extract PDF Text", use_container_width=True):
+                if st.button("📄 Extract PDF Text", width='stretch'):
                     with st.spinner("Extracting text from PDF..."):
                         try:
                             processor = PDFProcessor()
@@ -500,7 +347,7 @@ Patient reports good compliance with medication regimen."""
         st.markdown("---")
         
         # Clear button to reset everything
-        if st.button("🗑️ Clear Context", use_container_width=True):
+        if st.button("🗑️ Clear Context", width='stretch'):
             st.session_state.pdf_text = None
             st.session_state.pdf_metadata = None
             # Use temporary variables to clear - they'll transfer before widget creation
@@ -508,7 +355,7 @@ Patient reports good compliance with medication regimen."""
             st.session_state.sample_context = ''
             st.rerun()
         
-        compare_button = st.button("🚀 Compare Approaches", type="primary", use_container_width=True)
+        compare_button = st.button("🚀 Compare Approaches", type="primary", width='stretch')
     
     # Comparison Logic
     if compare_button:
@@ -733,7 +580,7 @@ Patient reports good compliance with medication regimen."""
                 paper_bgcolor='rgba(0,0,0,0)',
             )
             
-            st.plotly_chart(fig_tokens, use_container_width=True)
+            st.plotly_chart(fig_tokens, width='stretch')
         
         with chart_col2:
             st.markdown("**Time Comparison**")
@@ -776,7 +623,7 @@ Patient reports good compliance with medication regimen."""
                 paper_bgcolor='rgba(0,0,0,0)',
             )
             
-            st.plotly_chart(fig_time, use_container_width=True)
+            st.plotly_chart(fig_time, width='stretch')
     
     # Footer
     st.markdown("---")

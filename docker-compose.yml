@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   api:
     build:
@@ -69,6 +67,9 @@ services:
     ports:
       - "8501:8501"
     environment:
+      # API connection
+      - API_BASE_URL=http://api:8000
+      
       # Groq API configuration
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
@@ -80,6 +81,11 @@ services:
       
     env_file:
       - .env
+    
+    # Depend on API service
+    depends_on:
+      api:
+        condition: service_healthy
     
     # Mount logs directory for persistent logging
     volumes:
@@ -116,11 +122,6 @@ services:
     # Network configuration
     networks:
       - clinical-network
-    
-    # Depends on API service (optional, for proper startup order)
-    depends_on:
-      api:
-        condition: service_healthy
 
 networks:
   clinical-network:
